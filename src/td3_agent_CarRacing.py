@@ -17,20 +17,25 @@ class CarRacingTD3Agent(TD3BaseAgent):
 		# behavior network
 		self.actor_net = ActorNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
 		self.critic_net1 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
-		self.critic_net2 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
+		if self.twin_Q_net:
+			self.critic_net2 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
 		self.actor_net.to(self.device)
 		self.critic_net1.to(self.device)
-		self.critic_net2.to(self.device)
+		if self.twin_Q_net:
+			self.critic_net2.to(self.device)
 		# target network
 		self.target_actor_net = ActorNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
 		self.target_critic_net1 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
-		self.target_critic_net2 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
+		if self.twin_Q_net:
+			self.target_critic_net2 = CriticNetSimple(self.env.observation_space.shape[0], self.env.action_space.shape[0], 4)
 		self.target_actor_net.to(self.device)
 		self.target_critic_net1.to(self.device)
-		self.target_critic_net2.to(self.device)
+		if self.twin_Q_net:
+			self.target_critic_net2.to(self.device)
 		self.target_actor_net.load_state_dict(self.actor_net.state_dict())
 		self.target_critic_net1.load_state_dict(self.critic_net1.state_dict())
-		self.target_critic_net2.load_state_dict(self.critic_net2.state_dict())
+		if self.twin_Q_net:
+			self.target_critic_net2.load_state_dict(self.critic_net2.state_dict())
 		
 		# set optimizer
 		self.lra = config["lra"]
@@ -38,23 +43,25 @@ class CarRacingTD3Agent(TD3BaseAgent):
 		
 		self.actor_opt = torch.optim.Adam(self.actor_net.parameters(), lr=self.lra)
 		self.critic_opt1 = torch.optim.Adam(self.critic_net1.parameters(), lr=self.lrc)
-		self.critic_opt2 = torch.optim.Adam(self.critic_net2.parameters(), lr=self.lrc)
+		if self.twin_Q_net:
+			self.critic_opt2 = torch.optim.Adam(self.critic_net2.parameters(), lr=self.lrc)
 
 		# choose Gaussian noise or OU noise
 
-		# noise_mean = np.full(self.env.action_space.shape[0], 0.0, np.float32)
-		# noise_std = np.full(self.env.action_space.shape[0], 1.0, np.float32)
-		# self.noise = OUNoiseGenerator(noise_mean, noise_std)
-
-		# self.noise = GaussianNoise(self.env.action_space.shape[0], 0.0, 1.0)
+		if self.action_noise == "OU":
+			noise_mean = np.full(self.env.action_space.shape[0], 0.0, np.float32)
+			noise_std = np.full(self.env.action_space.shape[0], 1.0, np.float32)
+			self.noise = OUNoiseGenerator(noise_mean, noise_std)
+		elif self.action_noise == "Gaussian":
+			self.noise = GaussianNoise(self.env.action_space.shape[0], 0.0, 1.0)
 		
 	
 	def decide_agent_actions(self, state, sigma=0.0, brake_rate=0.015):
 		### TODO ###
 		# based on the behavior (actor) network and exploration noise
-		# with torch.no_grad():
-		# 	state = ???
-		# 	action = actor_net(state) + sigma * noise
+		with torch.no_grad():
+			state = torch.FloatTensor(state).unsqueeze(0)
+			action = actor_net(state, brake_rate) + sigma * noise
 
 		# return action
 
@@ -72,42 +79,52 @@ class CarRacingTD3Agent(TD3BaseAgent):
 
 		## Update Critic ##
 		# critic loss
-		# q_value1 = ???
-		# q_value2 = ???
-		# with torch.no_grad():
-		# 	# select action a_next from target actor network and add noise for smoothing
-		# 	a_next = ??? + noise
+		q_value1 = self.critic_net1(state, action)
+		if self.twin_Q_net:
+			q_value2 = self.critic_net2(state, action)
+		with torch.no_grad():
+			# select action a_next from target actor network and add noise for smoothing
+			if self.target_policy_smoothing:
+				a_next = self.target_actor_net(next_state) + noise
+			else:
+				a_next = self.target_actor_net(next_state)
 
-		# 	q_next1 = ???
-		# 	q_next2 = ???
-		# 	# select min q value from q_next1 and q_next2 (double Q learning)
-		# 	q_target = ???
+			q_next1 = self.target_critic_net1(next_state, a_next)
+			if self.twin_Q_net:
+				q_next2 = self.target_critic_net2(next_state, a_next)
+			# select min q value from q_next1 and q_next2 (double Q learning)
+			if self.twin_Q_net:
+				q_target = reward + self.gamma * torch.min(q_next1, q_next2) * (1 - done)
+			else:
+				q_target = reward + self.gamma * q_next1 * (1 - done)
 		
 		# critic loss function
-		# criterion = nn.MSELoss()
-		# critic_loss1 = criterion(q_value1, q_target)
-		# critic_loss2 = criterion(q_value2, q_target)
+		criterion = nn.MSELoss()
+		critic_loss1 = criterion(q_value1, q_target)
+		if self.twin_Q_net:
+			critic_loss2 = criterion(q_value2, q_target)
 
 		# optimize critic
-		# self.critic_net1.zero_grad()
-		# critic_loss1.backward()
-		# self.critic_opt1.step()
+		self.critic_net1.zero_grad()
+		critic_loss1.backward()
+		self.critic_opt1.step()
 
-		# self.critic_net2.zero_grad()
-		# critic_loss2.backward()
-		# self.critic_opt2.step()
+		if self.twin_Q_net:
+			self.critic_net2.zero_grad()
+			critic_loss2.backward()
+			self.critic_opt2.step()
 
 		## Delayed Actor(Policy) Updates ##
-		# if self.total_time_step % self.update_freq == 0:
-		# 	## update actor ##
-		# 	# actor loss
-		# 	# select action a from behavior actor network (a is different from sample transition's action)
-		# 	# get Q from behavior critic network, mean Q value -> objective function
-		# 	# maximize (objective function) = minimize -1 * (objective function)
-		# 	action = ???
-		# 	actor_loss = -1 * (???)
-		# 	# optimize actor
-		# 	self.actor_net.zero_grad()
-		# 	actor_loss.backward()
-		# 	self.actor_opt.step()
+		if self.total_time_step % self.update_freq == 0:
+			## update actor ##
+			# actor loss
+			# select action a from behavior actor network (a is different from sample transition's action)
+			# get Q from behavior critic network, mean Q value -> objective function
+			# maximize (objective function) = minimize -1 * (objective function)
+			action = self.actor_net(state)
+			actor_loss = -1 * (self.critic_net1(state, action).mean())
+			# optimize actor
+			self.actor_net.zero_grad()
+			actor_loss.backward()
+			self.actor_opt.step()
 		

@@ -55,6 +55,9 @@ class TD3BaseAgent(ABC):
 		self.gamma = config["gamma"]
 		self.tau = config["tau"]
 		self.update_freq = config["update_freq"]
+		self.twin_Q_net = config["twin_Q_net"]
+		self.target_policy_smoothing = config["target_policy_smoothing"]
+		self.action_noise = config["action_noise"]
 	
 		self.replay_buffer = ReplayMemory(int(config["replay_buffer_capacity"]))
 		self.writer = SummaryWriter(config["logdir"])
@@ -74,7 +77,8 @@ class TD3BaseAgent(ABC):
 		if self.total_time_step % self.update_freq == 0:
 			self.update_target_network(self.target_actor_net, self.actor_net, self.tau)
 			self.update_target_network(self.target_critic_net1, self.critic_net1, self.tau)
-			self.update_target_network(self.target_critic_net2, self.critic_net2, self.tau)
+			if self.twin_Q_net:
+				self.update_target_network(self.target_critic_net2, self.critic_net2, self.tau)
 
 	@abstractmethod
 	def update_behavior_network(self):
@@ -154,11 +158,18 @@ class TD3BaseAgent(ABC):
 	
 	# save model
 	def save(self, save_path):
-		torch.save(
+		if self.twin_Q_net:
+			torch.save(
 				{
 					'actor': self.actor_net.state_dict(),
 					'critic1': self.critic_net1.state_dict(),
 					'critic2': self.critic_net2.state_dict(),
+				}, save_path)
+		else:
+			torch.save(
+				{
+					'actor': self.actor_net.state_dict(),
+					'critic1': self.critic_net1.state_dict(),
 				}, save_path)
 
 	# load model
@@ -166,7 +177,8 @@ class TD3BaseAgent(ABC):
 		checkpoint = torch.load(load_path)
 		self.actor_net.load_state_dict(checkpoint['actor'])
 		self.critic_net1.load_state_dict(checkpoint['critic1'])
-		self.critic_net2.load_state_dict(checkpoint['critic2'])
+		if self.twin_Q_net:
+			self.critic_net2.load_state_dict(checkpoint['critic2'])
 
 	# load model weights and evaluate
 	def load_and_evaluate(self, load_path):
