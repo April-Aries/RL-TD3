@@ -61,11 +61,11 @@ class CarRacingTD3Agent(TD3BaseAgent):
 		# based on the behavior (actor) network and exploration noise
 		with torch.no_grad():
 			state = torch.FloatTensor(state).unsqueeze(0)
-			action = actor_net(state, brake_rate) + sigma * noise
+			action = self.actor_net(state.to(self.device), brake_rate)
+			action = action.cpu().numpy().squeeze()
+			action += (sigma * self.noise.generate())
 
-		# return action
-
-		return NotImplementedError
+		return action
 		
 
 	def update_behavior_network(self):
@@ -85,7 +85,8 @@ class CarRacingTD3Agent(TD3BaseAgent):
 		with torch.no_grad():
 			# select action a_next from target actor network and add noise for smoothing
 			if self.target_policy_smoothing:
-				a_next = self.target_actor_net(next_state) + noise
+				a_next = self.target_actor_net(next_state) + 0.005 * torch.randn_like(action)
+				a_next = torch.clamp(a_next, -1.0, 1.0)
 			else:
 				a_next = self.target_actor_net(next_state)
 
